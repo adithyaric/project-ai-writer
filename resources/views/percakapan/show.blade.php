@@ -58,9 +58,8 @@
                                         <div class="d-flex mb-3">
                                             <div class="card bg-light" style="max-width: 80%;">
                                                 <div class="card-body py-2 px-3">
-                                                    <p class="mb-0">{{ $pertanyaan->jawaban->isi_jawaban }}</p>
-                                                    <small
-                                                        class="d-block text-end text-muted">{{ $pertanyaan->jawaban->created_at->format('H:i') }}</small>
+                                                    <p class="mb-0">{!! \Illuminate\Support\Str::markdown($pertanyaan->jawaban->isi_jawaban) !!}</p>
+                                                    <small class="d-block text-end text-muted">{{ $pertanyaan->jawaban->created_at->format('H:i') }}</small>
                                                 </div>
                                             </div>
                                         </div>

@@ -9,6 +9,7 @@ use App\Models\Pertanyaan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class PercakapanController extends Controller
 {
@@ -88,75 +89,82 @@ class PercakapanController extends Controller
         $percakapan->form_data = $formData;
         $percakapan->save();
 
-        // Generate AI response
-        try {
-            // Get the instruksi prompt from the layanan
-            $instruksiPrompt = $percakapan->layanan->instruksiPrompt;
-            $promptText = $instruksiPrompt ? $instruksiPrompt->prompt_text : '';
+        // // Generate AI response
+        // try {
+        // Get the instruksi prompt from the layanan
+        $instruksiPrompt = $percakapan->layanan->instruksiPrompt;
+        $promptText = $instruksiPrompt ? $instruksiPrompt->prompt_text : '';
 
-            // Replace placeholders in the prompt_text with actual form data
-            foreach ($percakapan->form_data as $field => $value) {
-                $placeholder = '{'.$field.'}';
-                $promptText = str_replace($placeholder, $value, $promptText);
-            }
+        // Replace placeholders in the prompt_text with actual form data
+        foreach ($percakapan->form_data as $field => $value) {
+            $placeholder = '{'.$field.'}';
+            $promptText = str_replace($placeholder, $value, $promptText);
+        }
 
-            // Combine the prompt with form data for context
-            $contextData = [
-                'prompt' => $promptText,
-                'form_data' => $percakapan->form_data,
-                // 'question' => $request->isi_pertanyaan,
-            ];
+        // Combine the prompt with form data for context
+        $contextData = [
+            'prompt' => $promptText,
+            'form_data' => $percakapan->form_data,
+            // 'question' => $request->isi_pertanyaan,
+        ];
 
-            // Save the question
-            $pertanyaan = new Pertanyaan;
-            $pertanyaan->percakapan_id = $percakapan->id;
-            $pertanyaan->isi_pertanyaan = json_encode($contextData);
-            $pertanyaan->save();
+        // Save the question
+        $pertanyaan = new Pertanyaan;
+        $pertanyaan->percakapan_id = $percakapan->id;
+        $pertanyaan->isi_pertanyaan = json_encode($contextData);
+        $pertanyaan->save();
 
-            // Call Ollama API with retry mechanism
-            $retryCount = 0;
-            $maxRetries = 3;
-            $aiResponseText = 'Failed to generate AI response. Please try again later.';
+        // Call API with retry mechanism
+        $retryCount = 0;
+        $maxRetries = 3;
 
-            set_time_limit(120);
+        set_time_limit(120);
 
-            while ($retryCount < $maxRetries) {
-                try {
-                    \Log::info('Sending request to Ollama API with context:', $contextData);
+        while ($retryCount < $maxRetries) {
+            try {
+                \Log::info('Sending request to Deepseek API with context:', $contextData);
 
-                    $aiResponse = Http::timeout(120)->post('http://localhost:11434/api/generate', [
-                        'model' => 'gemma:2b',
-                        'prompt' => json_encode($contextData),
-                        'stream' => false,
-                    ]);
+                $aiResponse = Http::withHeaders([
+                    'Authorization' => 'Bearer '.env('DEEPSEEK_API_KEY'),
+                ])->timeout(120)->post('https://api.deepseek.com/v1/chat/completions', [
+                    'model' => 'deepseek-chat',
+                    'messages' => [
+                        ['role' => 'user', 'content' => json_encode($contextData)],
+                    ],
+                ]);
 
-                    \Log::info('Ollama API response:', $aiResponse->json());
+                \Log::info('Deepseek API response:', $aiResponse->json());
 
-                    if ($aiResponse->failed()) {
-                        throw new \Exception('Ollama API request failed: '.$aiResponse->body());
-                    }
+                if ($aiResponse->failed()) {
+                    throw new \Exception('Deepseek API request failed: '.$aiResponse->body());
+                }
 
-                    $responseData = $aiResponse->json();
-                    $aiResponseText = $responseData['response'] ?? 'No response received from AI model';
-                    // Save the AI response as the first jawaban
-                    $jawaban = new Jawaban;
-                    $jawaban->pertanyaan_id = $pertanyaan->id;
-                    $jawaban->isi_jawaban = $aiResponseText;
-                    $jawaban->save();
-                    break; // Exit the loop if successful
-                } catch (\Exception $e) {
-                    $retryCount++;
-                    \Log::warning("Attempt $retryCount failed: ".$e->getMessage());
-                    if ($retryCount === $maxRetries) {
-                        \Log::error('All retry attempts failed.');
-                    }
+                $responseData = $aiResponse->json();
+                $aiResponseText = $responseData['choices'][0]['message']['content'] ?? 'No response received from AI model';
+
+                // Save the AI response as the first jawaban
+                $jawaban = new Jawaban;
+                $jawaban->pertanyaan_id = $pertanyaan->id;
+                $jawaban->isi_jawaban = $aiResponseText;
+                $jawaban->save();
+                break; // Exit the loop if successful
+            } catch (\Exception $e) {
+                $retryCount++;
+                \Log::warning("Attempt $retryCount failed: ".$e->getMessage());
+                if ($retryCount === $maxRetries) {
+                    \Log::error('All retry attempts failed.');
                 }
             }
-
-        } catch (\Exception $e) {
-            // Log the error but don't fail the entire operation
-            \Log::error('AI response generation failed: '.$e->getMessage());
         }
+
+        // } catch (\Exception $e) {
+        //     \Log::error('AI response generation failed: '.$e->getMessage());
+
+        //     return response()->json([
+        //         'status' => 'error',
+        //         'message' => 'Failed to get AI response: '.$e->getMessage(),
+        //     ], 500);
+        // }
 
         return redirect()->route('percakapan.show', $percakapan->id)
             ->with('success', 'Percakapan berhasil dibuat');
@@ -165,11 +173,6 @@ class PercakapanController extends Controller
     public function show($id)
     {
         $percakapan = Percakapan::with(['pertanyaan.jawaban', 'layanan'])->findOrFail($id);
-
-        // Check if user owns this conversation
-        // if ($percakapan->user_id != Auth::id()) {
-        // abort(403, 'Unauthorized action.');
-        // }
 
         return view('percakapan.show', compact('percakapan'));
     }
@@ -182,51 +185,62 @@ class PercakapanController extends Controller
 
         $percakapan = Percakapan::findOrFail($id);
 
-        // Check if user owns this conversation
-        // if ($percakapan->user_id != Auth::id()) {
-        // abort(403, 'Unauthorized action.');
-        // }
-
         // Save the question
         $pertanyaan = new Pertanyaan;
         $pertanyaan->percakapan_id = $percakapan->id;
         $pertanyaan->isi_pertanyaan = $request->isi_pertanyaan;
         $pertanyaan->save();
 
-        // Here you would make API call to AI service
-        // This is a placeholder for your actual AI integration
-        // Actual API call to local Ollama service
-        try {
-            $aiResponse = Http::timeout(120)->post('http://localhost:11434/api/generate', [
-                'model' => 'gemma:2b',
-                'prompt' => $request->isi_pertanyaan,
-                'stream' => false,
-            ]);
+        // Call API with retry mechanism
+        $retryCount = 0;
+        $maxRetries = 3;
 
-            // Check for HTTP errors
-            if ($aiResponse->failed()) {
-                throw new \Exception('Ollama API request failed: '.$aiResponse->body());
+        set_time_limit(120);
+        while ($retryCount < $maxRetries) {
+            try {
+                $aiResponse = Http::withHeaders([
+                    'Authorization' => 'Bearer '.env('DEEPSEEK_API_KEY'),
+                ])->timeout(120)->post('https://api.deepseek.com/v1/chat/completions', [
+                    'model' => 'deepseek-chat',
+                    'messages' => [
+                        ['role' => 'user', 'content' => $request->isi_pertanyaan],
+                    ],
+                ]);
+
+                // Check for HTTP errors
+                if ($aiResponse->failed()) {
+                    throw new \Exception('Deepseek API request failed: '.$aiResponse->body());
+                }
+
+                $responseData = $aiResponse->json();
+                $aiResponseText = $responseData['choices'][0]['message']['content'] ?? 'No response received from AI model';
+
+                // Save the answer
+                $jawaban = new Jawaban;
+                $jawaban->pertanyaan_id = $pertanyaan->id;
+                $jawaban->isi_jawaban = $aiResponseText;
+                $jawaban->save();
+
+                return response()->json([
+                    'status' => 'success',
+                    'pertanyaan' => $pertanyaan,
+                    'jawaban' => [
+                        'isi_jawaban' => Str::markdown($jawaban->isi_jawaban),
+                        'created_at' => $jawaban->created_at,
+                    ],
+                ]);
+            } catch (\Exception $e) {
+                $retryCount++;
+                \Log::warning("Attempt $retryCount failed: ".$e->getMessage());
+                if ($retryCount === $maxRetries) {
+                    \Log::error('All retry attempts failed.');
+                }
+
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Failed to get AI response: '.$e->getMessage(),
+                ], 500);
             }
-
-            $responseData = $aiResponse->json();
-            $aiResponseText = $responseData['response'] ?? 'No response received from AI model';
-
-            // Save the answer
-            $jawaban = new Jawaban;
-            $jawaban->pertanyaan_id = $pertanyaan->id;
-            $jawaban->isi_jawaban = $aiResponseText;
-            $jawaban->save();
-
-            return response()->json([
-                'status' => 'success',
-                'pertanyaan' => $pertanyaan,
-                'jawaban' => $jawaban,
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Failed to get AI response: '.$e->getMessage(),
-            ], 500);
         }
     }
 }

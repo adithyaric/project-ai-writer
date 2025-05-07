@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PercakapanController;
 use Illuminate\Support\Facades\Route;
 
@@ -25,7 +26,7 @@ Route::get('/percakapan/form-inputan/{id}', [PercakapanController::class, 'getFo
 Route::post('/percakapan/{id}/chat', [PercakapanController::class, 'saveChat'])->name('percakapan.chat');
 
 Route::prefix('admin')
-    // ->middleware(['auth'])
+    ->middleware(['auth'])
     ->group(function () {
         Route::resource('layanan', \App\Http\Controllers\Admin\LayananController::class);
         Route::get('/instruksi-prompt/{id}/edit', [\App\Http\Controllers\Admin\InstruksiPromptController::class, 'edit'])->name('instruksi-prompt.edit');
@@ -38,3 +39,9 @@ Route::prefix('admin')
         Route::put('/form-inputan/{formInputan}/update', [\App\Http\Controllers\Admin\FormInputanController::class, 'update'])->name('form-inputan.update');
         Route::delete('/form-inputan/{formInputan}', [\App\Http\Controllers\Admin\FormInputanController::class, 'destroy'])->name('form-inputan.destroy');
     });
+
+Route::get('login', [AuthController::class, 'index'])->name('login');
+Route::post('post-login', [AuthController::class, 'postLogin'])->name('login.post');
+Route::get('registration', [AuthController::class, 'registration'])->name('register');
+Route::post('post-registration', [AuthController::class, 'postRegistration'])->name('register.post');
+Route::post('logout', [AuthController::class, 'logout'])->name('logout');
